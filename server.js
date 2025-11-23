@@ -1,9 +1,9 @@
-// File: server.js (Phiên bản Hoàn Chỉnh sử dụng lowdb/JSON)
+// File: server.js (Phiên bản Hoàn Chỉnh sử dụng lowdb/JSON - Đã sửa lỗi URL Localhost)
 const express = require('express');
 const bodyParser = require('body-parser');
 const session = require('express-session');
 const flash = require('connect-flash');
-const bcrypt = require('bcryptjs'); // Vẫn dùng bcryptjs vì không cần biên dịch
+const bcrypt = require('bcryptjs'); 
 const { nanoid } = require('nanoid'); 
 // LOWDB Imports
 const { Low } = require('lowdb');
@@ -13,6 +13,22 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const saltRounds = 10; 
 const DB_FILE = 'db.json'; // Tên file Database JSON
+
+// --- Hàm quan trọng để lấy Base URL động ---
+/**
+ * Lấy Base URL (giao thức + host) từ request hiện tại.
+ * Đảm bảo đường dẫn đúng khi chạy trên Render (HTTPS).
+ */
+function getBaseUrl(req) {
+    // Lấy host (ví dụ: noteqvn-sever.onrender.com)
+    const host = req.headers.host; 
+    
+    // Lấy giao thức: ưu tiên header X-Forwarded-Proto (thường là 'https' trên Render)
+    const protocol = req.get('X-Forwarded-Proto') || req.protocol; 
+
+    return `${protocol}://${host}`;
+}
+// --- Hết Hàm quan trọng ---
 
 // --- Cấu hình LowDB (JS-only) ---
 let db;
@@ -45,7 +61,7 @@ app.use(session({
     secret: 'daylakhobimathoacsession', 
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 60 * 60 * 1000 }
+    cookie: { maxAge: 60 * 60 * 1000, secure: process.env.NODE_ENV === 'production' } // Thêm secure: true cho production
 }));
 app.use(flash());
 
@@ -228,6 +244,205 @@ function renderHTML(title, bodyContent, req, username) {
     `;
 }
 
+// --- TRANG CHỦ (GET /) ---
+app.get('/', async (req, res) => {
+    const BASE_URL = getBaseUrl(req); // <--- LẤY BASE URL ĐỘNG TẠI ĐÂY
+
+    const db = app.locals.db;
+    let noteContent = ''; // Nội dung ghi chú đã được lưu (nếu có)
+    let noteLinkBox = '';
+
+    // Kiểm tra và hiển thị ghi chú đã lưu (nếu có)
+    if (req.session.lastNoteId) {
+        // Tìm ghi chú trong DB
+        const lastNote = db.data.notes.find(n => n.id === req.session.lastNoteId);
+        
+        if (lastNote) {
+            noteContent = lastNote.content;
+
+            // TẠO URL CHÍNH XÁC
+            const fullNoteUrl = `${BASE_URL}/${lastNote.id}`; // <--- SỬ DỤNG BASE_URL ĐỘNG
+
+            noteLinkBox = `
+                <h2>Ghi Chú Đã Lưu:</h2>
+                <div class="note-box">${noteContent}</div>
+                <h3>Đường dẫn chia sẻ:</h3>
+                <div class="link-box">
+                    <span id="note-link-url">${fullNoteUrl}</span>
+                    <button class="copy-button" onclick="copyToClipboard('${fullNoteUrl}')">Sao Chép</button>
+                </div>
+            `;
+            // Xóa ID sau khi hiển thị 
+            delete req.session.lastNoteId; 
+        }
+    }
+
+    const bodyContent = `
+        <h1>✍️ Tạo Ghi Chú Mới</h1>
+        <form method="POST" action="/">
+            <textarea name="note" rows="8" placeholder="Viết ghi chú của bạn vào đây..." required></textarea>
+            <button type="submit" class="button-primary">💾 Lưu Ghi Chú</button>
+        </form>
+        ${noteLinkBox}
+        <script>
+            function copyToClipboard(text) {
+                // Sử dụng API Clipboard hiện đại
+                navigator.clipboard.writeText(text).then(function() {
+                    alert('Đã sao chép đường dẫn: ' + text);
+                }, function(err) {
+                    // Fallback cho các trình duyệt cũ hơn
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    alert('Đã sao chép đường dẫn: ' + text);
+                });
+            }
+        </script>
+    `;
+    res.send(renderHTML('Trang Chủ', bodyContent, req, res.locals.username));
+});
+
+// --- XỬ LÝ LƯU GHI CHÚ (POST /) ---
+app.post('/', isAuthenticated, async (req, res) => {
+    const { note } = req.body;
+    const db = app.locals.db;
+
+    if (!note || note.trim() === "") {
+        req.flash('error', 'Nội dung ghi chú không được để trống.');
+        return res.redirect('/');
+    }
+
+    try {
+        const userId = req.session.userId;
+        const noteId = nanoid(8); 
+        
+        db.data.notes.push({ 
+            id: noteId, 
+            userId: userId, 
+            content: note,
+            createdAt: new Date().toISOString()
+        });
+        await db.write();
+
+        // Lưu ID vào session để route GET / có thể hiển thị link đúng
+        req.session.lastNoteId = noteId; 
+        
+        req.flash('success', 'Ghi chú đã được lưu thành công!');
+        res.redirect('/');
+        
+    } catch (e) {
+        console.error("Lỗi khi lưu ghi chú:", e);
+        req.flash('error', 'Lỗi hệ thống khi lưu ghi chú.');
+        res.redirect('/');
+    }
+});
+
+// --- TRANG XEM GHI CHÚ RIÊNG (GET /:id) ---
+app.get('/:id', async (req, res) => {
+    const noteId = req.params.id;
+    const db = app.locals.db;
+    
+    // Tìm ghi chú
+    const note = db.data.notes.find(n => n.id === noteId);
+
+    if (!note) {
+        req.flash('error', 'Ghi chú không tồn tại.');
+        return res.redirect('/');
+    }
+    
+    // Lấy link hiện tại để chia sẻ
+    const BASE_URL = getBaseUrl(req);
+    const fullNoteUrl = `${BASE_URL}/${noteId}`;
+
+    const bodyContent = `
+        <h1>Ghi Chú ${noteId}</h1>
+        <div class="note-box">${note.content}</div>
+        <h3>Đường dẫn chia sẻ:</h3>
+        <div class="link-box">
+            <span id="note-link-url">${fullNoteUrl}</span>
+            <button class="copy-button" onclick="copyToClipboard('${fullNoteUrl}')">Sao Chép</button>
+        </div>
+        <p><a href="/" style="font-size: 16px; margin-top: 15px; display: block;">Về trang tạo ghi chú</a></p>
+        <script>
+            function copyToClipboard(text) {
+                navigator.clipboard.writeText(text).then(function() {
+                    alert('Đã sao chép đường dẫn: ' + text);
+                }, function(err) {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    alert('Đã sao chép đường dẫn: ' + text);
+                });
+            }
+        </script>
+    `;
+    res.send(renderHTML(`Ghi Chú ${noteId}`, bodyContent, req, res.locals.username));
+});
+
+// --- TRANG DANH SÁCH GHI CHÚ CỦA TÔI (GET /mynotes) ---
+app.get('/mynotes', isAuthenticated, async (req, res) => {
+    const db = app.locals.db;
+    const userId = req.session.userId;
+    
+    // Lấy tất cả ghi chú của người dùng này, sắp xếp theo thời gian mới nhất
+    const userNotes = db.data.notes
+        .filter(n => n.userId === userId)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    let notesList = userNotes.map(n => {
+        // Lấy 50 ký tự đầu làm tiêu đề xem trước
+        const preview = n.content.substring(0, 50) + (n.content.length > 50 ? '...' : '');
+        const date = new Date(n.createdAt).toLocaleString('vi-VN');
+        return `
+            <div class="note-item">
+                <p><strong>Ngày tạo:</strong> ${date}</p>
+                <p><b>Xem trước:</b> ${preview}</p>
+                <p><a href="/${n.id}">Xem Chi Tiết</a> | 
+                   <a href="/delete/${n.id}" onclick="return confirm('Bạn có chắc chắn muốn xóa ghi chú này?');" style="color: red;">Xóa</a></p>
+            </div>
+        `;
+    }).join('');
+
+    if (userNotes.length === 0) {
+        notesList = '<p>Bạn chưa có ghi chú nào. Hãy tạo ghi chú mới!</p>';
+    }
+
+    const bodyContent = `
+        <h1>📝 Ghi Chú Của Tôi</h1>
+        ${notesList}
+    `;
+    res.send(renderHTML('Ghi Chú Của Tôi', bodyContent, req, res.locals.username));
+});
+
+// --- XỬ LÝ XÓA GHI CHÚ (GET /delete/:id) ---
+app.get('/delete/:id', isAuthenticated, async (req, res) => {
+    const noteId = req.params.id;
+    const db = app.locals.db;
+    const userId = req.session.userId;
+
+    // Tìm index của ghi chú
+    const noteIndex = db.data.notes.findIndex(n => n.id === noteId && n.userId === userId);
+
+    if (noteIndex === -1) {
+        req.flash('error', 'Ghi chú không tồn tại hoặc bạn không có quyền xóa.');
+        return res.redirect('/mynotes');
+    }
+
+    // Xóa ghi chú
+    db.data.notes.splice(noteIndex, 1);
+    await db.write();
+
+    req.flash('success', 'Ghi chú đã được xóa thành công.');
+    res.redirect('/mynotes');
+});
+
+
 // --- TRANG ĐĂNG KÝ (GET /register) ---
 app.get('/register', (req, res) => {
     const bodyContent = `
@@ -324,182 +539,33 @@ app.post('/login', async (req, res) => {
             req.session.userId = user.id; // Lưu ID người dùng vào Session
             req.flash('success', `Chào mừng ${username}!`);
             console.log(`[LOGIN] Đăng nhập thành công: ${username}`);
-            return res.redirect('/');
+            res.redirect('/');
         } else {
             req.flash('error', 'Tên người dùng hoặc mật khẩu không đúng.');
-            return res.redirect('/login');
+            res.redirect('/login');
         }
     } catch (e) {
-        console.error("Lỗi so sánh mật khẩu:", e);
+        console.error("Lỗi xác minh mật khẩu:", e);
         req.flash('error', 'Lỗi hệ thống khi đăng nhập.');
         res.redirect('/login');
     }
 });
 
-// --- ĐĂNG XUẤT (GET /logout) ---
+// --- XỬ LÝ ĐĂNG XUẤT (GET /logout) ---
 app.get('/logout', (req, res) => {
     req.session.destroy(err => {
         if (err) {
-            console.error("Lỗi đăng xuất:", err);
+            console.error('Lỗi khi hủy session:', err);
             return res.redirect('/');
         }
         res.clearCookie('connect.sid'); 
-        res.redirect('/login');
+        req.flash('success', 'Bạn đã đăng xuất thành công.');
+        res.redirect('/');
     });
 });
 
-// --- TRANG HIỂN THỊ NOTES ĐÃ LƯU (GET /mynotes) ---
-app.get('/mynotes', isAuthenticated, async (req, res) => {
-    const userId = req.session.userId;
-    const db = app.locals.db;
 
-    // Lọc ghi chú và sắp xếp theo thời gian mới nhất
-    const userNotes = db.data.notes
-        .filter(note => note.userId === userId)
-        .sort((a, b) => b.timestamp - a.timestamp);
-    
-    let notesList = '';
-    if (userNotes.length === 0) {
-        notesList = '<p>Bạn chưa có ghi chú nào.</p>';
-    } else {
-        notesList = userNotes.map(note => {
-            const date = new Date(note.timestamp).toLocaleString();
-            const snippet = note.content.substring(0, 50).trim() + (note.content.length > 50 ? '...' : ''); 
-            return `
-                <div class="note-item">
-                    <p><b>[${date}]</b> <a href="/${note.id}">Xem ghi chú ID: ${note.id}</a></p>
-                    <p style="margin-left: 10px; font-size: 0.9em; color: #555;">${snippet}</p>
-                </div>
-            `;
-        }).join('');
-    }
-
-    const bodyContent = `
-        <h1>📖 Ghi Chú Của Tôi</h1>
-        <p>Tổng cộng: ${userNotes.length} ghi chú.</p>
-        <div style="width: 100%; max-width: 500px; margin: auto;">
-            ${notesList}
-        </div>
-        <a href="/" class="button-primary" style="background-color: #6c757d;">➕ Thêm Ghi Chú Mới</a>
-    `;
-    res.send(renderHTML('Ghi Chú Của Tôi', bodyContent, req, res.locals.username));
-});
-
-// --- TRANG CHỦ (GET /) ---
-app.get('/', (req, res) => {
-    const bodyContent = `
-        <h1>✍️ Tạo Ghi Chú Mới</h1>
-        <p>${req.session.userId ? 'Ghi chú sẽ được lưu vào file JSON.' : 'Vui lòng đăng nhập để lưu ghi chú.'}</p>
-        <form method="POST" action="/save">
-            <textarea name="content" rows="10" cols="50" placeholder="Nhập ghi chú của bạn..."></textarea><br>
-            <button type="submit" class="button-primary" ${req.session.userId ? '' : 'disabled'} title="${req.session.userId ? '' : 'Vui lòng đăng nhập'}">💾 Lưu Ghi Chú</button>
-        </form>
-    `;
-    res.send(renderHTML('Trang Chủ', bodyContent, req, res.locals.username));
-});
-
-// --- XỬ LÝ LƯU GHI CHÚ (POST /save) ---
-app.post('/save', isAuthenticated, async (req, res) => {
-    const content = req.body.content;
-    const userId = req.session.userId;
-    const db = app.locals.db;
-
-    if (!content) {
-        req.flash('error', 'Ghi chú không được để trống.');
-        return res.redirect('/');
-    }
-
-    try {
-        const noteId = nanoid(8); 
-        const timestamp = Date.now();
-        
-        // Thêm ghi chú vào mảng notes
-        db.data.notes.push({ id: noteId, content, userId, timestamp });
-        await db.write(); // Lưu thay đổi vào file JSON
-        
-        console.log(`[SAVE] Note ID ${noteId} đã lưu bởi User ID: ${userId} vào JSON.`);
-        req.flash('success', 'Ghi chú đã được lưu thành công!');
-        res.redirect(`/${noteId}`); 
-    } catch (e) {
-        console.error("Lỗi LowDB khi lưu ghi chú:", e);
-        req.flash('error', 'Lỗi hệ thống khi lưu ghi chú.');
-        res.redirect('/');
-    }
-});
-
-// --- Hiển Thị Ghi Chú Đã Lưu (GET /:id) ---
-app.get('/:id', isAuthenticated, (req, res) => {
-    const id = req.params.id;
-    const userId = req.session.userId;
-    const db = app.locals.db;
-
-    // Lấy ghi chú
-    const note = db.data.notes.find(n => n.id === id && n.userId === userId);
-    
-    if (!note) {
-        req.flash('error', 'Ghi chú không tồn tại hoặc bạn không có quyền truy cập.');
-        return res.redirect('/');
-    }
-    
-    const displayContent = note.content.replace(/\n/g, '<br>');
-    const fullLink = `http://localhost:${PORT}/${id}`; 
-    const rawLink = `/raw/${id}`;
-
-    const bodyContent = `
-        <h1>✅ Ghi Chú Đã Lưu</h1>
-        <h2>ID: ${id}</h2>
-        
-        <div class="note-box">${displayContent}</div>
-
-        <p>Đường dẫn ghi chú của bạn:</p>
-        <div class="link-box">
-            <span id="noteLink">${fullLink}</span>
-            <button class="copy-button" onclick="copyLink()">📋 Copy Link</button>
-        </div>
-
-        <p>Link RAW (Text thuần):</p>
-        <a href="${rawLink}">http://localhost:${PORT}${rawLink}</a>
-        
-        <hr style="width:100%; border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-        
-        <a href="/" class="button-primary" style="background-color: #6c757d;">➕ Thêm Ghi Chú Mới</a>
-
-    <script>
-        function copyLink() {
-            const linkElement = document.getElementById('noteLink');
-            const linkText = linkElement.textContent;
-            navigator.clipboard.writeText(linkText).then(() => {
-                alert("Đã sao chép đường link: " + linkText);
-            }).catch(err => {
-                console.error('Không thể sao chép: ', err);
-                prompt("Sao chép thủ công:", linkText);
-            });
-        }
-    </script>
-    `;
-    res.send(renderHTML(`Note ID: ${id}`, bodyContent, req, res.locals.username));
-});
-
-// --- Link RAW (GET /raw/:id) ---
-app.get('/raw/:id', isAuthenticated, (req, res) => {
-    const id = req.params.id;
-    const userId = req.session.userId;
-    const db = app.locals.db;
-
-    const note = db.data.notes.find(n => n.id === id && n.userId === userId);
-
-    if (!note) {
-        return res.status(404).send("Lỗi 404: Không tìm thấy nội dung RAW hoặc bạn không có quyền.");
-    }
-
-    res.set('Content-Type', 'text/plain');
-    res.send(note.content);
-});
-
-
- // Khởi động server
+// --- KHỞI ĐỘNG SERVER ---
 app.listen(PORT, () => {
-    console.log(`✅ Server NoteQVn đã khởi động thành công!`);
-    console.log(`📢 Truy cập tại: http://localhost:${PORT}`);
-    console.log(`*** Dữ liệu được lưu vào file ${DB_FILE} ***`);
+    console.log(`✅ Server đang chạy trên cổng ${PORT}`);
 });
