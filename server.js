@@ -1,320 +1,4 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const session = require('express-session');
-const flash = require('connect-flash');
-const bcrypt = require('bcryptjs'); 
-const { nanoid } = require('nanoid'); 
-// LOWDB Imports
-const { Low } = require('lowdb');
-const { JSONFile } = require('lowdb/node');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const saltRounds = 10; 
-const DB_FILE = 'db.json'; // Tên file Database JSON
-
-// --- Cấu hình LowDB (JS-only) ---
-let db;
-try {
-    const adapter = new JSONFile(DB_FILE);
-    db = new Low(adapter, { users: [], notes: [] });
-    
-    // Tải dữ liệu từ file
-    db.read();
-    
-    // Khởi tạo dữ liệu mặc định nếu file trống
-    if (!db.data.users || !db.data.notes) {
-        db.data = { users: [], notes: [] };
-        db.write();
-    }
-    console.log(`[DB] Đã kết nối đến Database LowDB (JSON): ${DB_FILE}`);
-    app.locals.db = db;
-
-} catch (err) {
-    console.error('❌ Lỗi FATAL khi khởi tạo LowDB:', err.message);
-    process.exit(1);
-}
-
-// --- Cấu hình Middleware ---
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
-
-// Cấu hình Session 
-app.use(session({
-    secret: 'daylakhobimathoacsession', 
-    resave: false,
-    saveUninitialized: false,
-    cookie: { maxAge: 60 * 60 * 1000 }
-}));
-app.use(flash());
-
-// Middleware để kiểm tra đã đăng nhập chưa
-function isAuthenticated(req, res, next) {
-    if (req.session.userId) {
-        next();
-    } else {
-        req.flash('error', 'Bạn cần đăng nhập để truy cập trang này.');
-        res.redirect('/login');
-    }
-}
-
-// Middleware để thêm thông tin người dùng vào res.locals
-app.use(async (req, res, next) => {
-    res.locals.isLoggedIn = !!req.session.userId;
-    res.locals.success = req.flash('success');
-    res.locals.error = req.flash('error');
-    res.locals.username = 'User'; 
-
-    if (req.session.userId) {
-        const user = app.locals.db.data.users.find(u => u.id === req.session.userId);
-        if (user) {
-            res.locals.username = user.username;
-        }
-    }
-    next();
-});
-
-// CSS TỔNG THỂ (Giữ nguyên)
-const style = `
-    body {
-        font-family: Arial, sans-serif;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        margin-top: 50px;
-        background-color: #f4f4f9;
-        color: #333;
-    }
-    .container {
-        width: 90%;
-        max-width: 600px;
-        padding: 20px;
-        background: white;
-        border-radius: 10px;
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        text-align: center;
-    }
-    .header {
-        width: 100%;
-        max-width: 600px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0 20px;
-        margin-bottom: 20px;
-    }
-    .menu-button {
-        background: none;
-        border: none;
-        font-size: 30px;
-        cursor: pointer;
-        color: #007bff;
-        text-decoration: none;
-    }
-    input[type="text"], input[type="password"], textarea {
-        width: calc(100% - 22px);
-        padding: 10px;
-        margin: 8px 0;
-        border: 1px solid #ccc;
-        border-radius: 5px;
-        box-sizing: border-box;
-    }
-    .button-primary {
-        background-color: #007bff;
-        color: white;
-        border: none;
-        padding: 10px 20px;
-        font-size: 16px;
-        margin-top: 10px;
-        cursor: pointer;
-        border-radius: 5px;
-        transition: background-color 0.3s;
-    }
-    .button-primary:hover {
-        background-color: #0056b3;
-    }
-    .error-message {
-        color: red;
-        margin-bottom: 15px;
-        border: 1px solid red;
-        padding: 10px;
-        background-color: #ffe0e0;
-        border-radius: 5px;
-    }
-    .success-message {
-        color: green;
-        margin-bottom: 15px;
-        border: 1px solid green;
-        padding: 10px;
-        background-color: #e0ffe0;
-        border-radius: 5px;
-    }
-    .note-box {
-        text-align: left;
-        border: 2px solid #007bff; 
-        padding: 15px;
-        background-color: #eaf6ff;
-        border-radius: 8px;
-        margin-bottom: 20px;
-        white-space: pre-wrap;
-    }
-    .note-item {
-        border-bottom: 1px solid #eee;
-        padding: 10px 0;
-        text-align: left;
-    }
-    .note-item:last-child {
-        border-bottom: none;
-    }
-    .link-box {
-        background-color: #f0f0f0;
-        padding: 10px;
-        border-radius: 5px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 10px;
-    }
-    .copy-button {
-        background-color: #28a745;
-        color: white;
-        border: none;
-        padding: 8px 15px;
-        border-radius: 5px;
-        cursor: pointer;
-        margin-left: 10px;
-        transition: background-color 0.3s;
-    }
-    .copy-button:hover {
-        background-color: #1e7e34;
-    }
-`;
-
-/** Hàm render HTML chung **/
-function renderHTML(title, bodyContent, req, username) {
-    let headerLinks = `<a href="/register" class="menu-button" style="font-size: 18px;">Đăng Ký</a> | <a href="/login" class="menu-button" style="font-size: 18px;">Đăng Nhập</a>`;
-    let menuButton = '';
-    
-    if (req.session.userId) {
-        headerLinks = `<span style="font-size: 16px;">Xin chào, <b>${username}</b>!</span> | <a href="/logout" class="menu-button" style="font-size: 18px; color: red;">Đăng Xuất</a>`;
-        menuButton = `<a href="/mynotes" class="menu-button">|||</a>`;
-    }
-
-    // Lấy tất cả flash messages và hiển thị
-    const errorMessages = req.flash('error');
-    const successMessages = req.flash('success');
-    
-    let flashMessages = '';
-    if (errorMessages.length > 0) {
-        flashMessages += `<p class="error-message">${errorMessages.join('<br>')}</p>`;
-    }
-    if (successMessages.length > 0) {
-        flashMessages += `<p class="success-message">${successMessages.join('<br>')}</p>`;
-    }
-
-
-    return `
-        <!DOCTYPE html>
-        <html lang="vi">
-        <head>
-            <title>${title}</title>
-            <style>${style}</style>
-        </head>
-        <body>
-            <div class="header">
-                <a href="/" class="menu-button" style="font-size: 24px;">📝 NoteQVn</a>
-                ${menuButton}
-                <div style="text-align: right;">${headerLinks}</div>
-            </div>
-            <div class="container">
-                ${flashMessages}
-                ${bodyContent}
-            </div>
-        </body>
-        </html>
-    `;
-}
-
-// ------------------------------------
-// --- CÁC ROUTES CỦA ỨNG DỤNG ---
-// ------------------------------------
-
-// --- TRANG ĐĂNG KÝ (GET /register) ---
-app.get('/register', (req, res) => {
-    const bodyContent = `
-        <h1>Đăng Ký Tài Khoản</h1>
-        <form method="POST" action="/register">
-            <label for="username">Tên người dùng:</label>
-            <input type="text" id="username" name="username" required><br>
-            
-            <label for="password">Mật khẩu:</label>
-            <input type="password" id="password" name="password" required><br>
-            
-            <label for="confirm_password">Xác nhận lại mật khẩu:</label>
-            <input type="password" id="confirm_password" name="confirm_password" required><br>
-            
-            <button type="submit" class="button-primary">Tạo Tài Khoản</button>
-        </form>
-    `;
-    res.send(renderHTML('Đăng Ký', bodyContent, req, res.locals.username));
-});
-
-// --- XỬ LÝ ĐĂNG KÝ (POST /register) ---
-app.post('/register', async (req, res) => {
-    const { username, password, confirm_password } = req.body;
-    const db = app.locals.db;
-
-    if (password.length < 4) {
-        req.flash('error', 'Mật khẩu phải có ít nhất 4 ký tự.');
-        return res.redirect('/register');
-    }
-    if (password !== confirm_password) {
-        req.flash('error', 'Mật khẩu xác nhận không khớp.');
-        return res.redirect('/register');
-    }
-
-    // 1. Kiểm tra username tồn tại
-    const userExists = db.data.users.find(u => u.username === username);
-
-    if (userExists) {
-        req.flash('error', 'Tên người dùng đã tồn tại. Vui lòng chọn tên khác.');
-        return res.redirect('/register');
-    }
-
-    // 2. Mã hóa và lưu
-    try {
-        const passwordHash = await bcrypt.hash(password, saltRounds);
-        const userId = nanoid(10);
-        
-        db.data.users.push({ id: userId, username, passwordHash });
-        await db.write(); // Lưu thay đổi vào file JSON
-        
-        req.flash('success', 'Đăng ký thành công! Vui lòng đăng nhập.');
-        console.log(`[USER] Đăng ký mới: ${username} (ID: ${userId})`);
-        res.redirect('/login');
-    } catch (e) {
-        console.error("Lỗi mã hóa/LowDB:", e);
-        req.flash('error', 'Lỗi hệ thống khi tạo tài khoản.');
-        res.redirect('/register');
-    }
-});
-
-// --- TRANG ĐĂNG NHẬP (GET /login) ---
-app.get('/login', (req, res) => {
-    const bodyContent = `
-        <h1>Đăng Nhập</h1>
-        <form method="POST" action="/login">
-            <label for="username">Tên người dùng:</label>
-            <input type="text" id="username" name="username" required><br>
-            
-            <label for="password">Mật khẩu:</label>
-            <input type="password" id="password" name="password" required><br>
-            
-            <button type="submit" class="button-primary">Đăng Nhập</button>
-        </form>
-    `;
-    res.send(renderHTML('Đăng Nhập', bodyContent, req, res.locals.username));
-});
+// Tiếp theo phần code bạn cung cấp (bắt đầu sau phần code gốc của POST /login)
 
 // --- XỬ LÝ ĐĂNG NHẬP (POST /login) ---
 app.post('/login', async (req, res) => {
@@ -384,7 +68,7 @@ app.post('/create', async (req, res) => {
     }
 
     const noteId = nanoid(8);
-    const userId = req.session.userId || null; 
+    const userId = req.session.userId || null; // ID người tạo (hoặc null nếu chưa đăng nhập)
     const username = res.locals.username;
 
     const newNote = {
@@ -465,7 +149,7 @@ app.post('/note/:id/delete', isAuthenticated, async (req, res) => {
     res.redirect('/mynotes');
 });
 
-// --- TRANG XEM GHI CHÚ ĐỘC LẬP (GET /note/:id) (ĐÃ SỬA LỖI URL ĐỘNG) ---
+// --- TRANG XEM GHI CHÚ ĐỘC LẬP (GET /note/:id) (ĐÃ SỬA LỖI URL ĐỘNG CHO RENDER) ---
 app.get('/note/:id', (req, res) => {
     const noteId = req.params.id;
     const db = app.locals.db;
@@ -477,7 +161,7 @@ app.get('/note/:id', (req, res) => {
         return res.redirect('/');
     }
 
-    // ⭐ SỬA LỖI URL: Sử dụng req.protocol và req.get('host') để lấy tên miền động (Render/localhost)
+    // ⭐ SỬA LỖI URL: Dùng req.protocol và req.get('host') để có tên miền động
     const fullShareLink = `${req.protocol}://${req.get('host')}/note/${note.id}`;
 
     const isOwner = req.session.userId === note.userId;
@@ -507,7 +191,7 @@ app.get('/note/:id', (req, res) => {
 
         <script>
             function copyLink() {
-                // ĐÃ SỬ DỤNG fullShareLink ĐỘNG
+                // Sử dụng link đã được tạo động
                 const link = '${fullShareLink}'; 
                 navigator.clipboard.writeText(link).then(() => {
                     alert('Đã sao chép liên kết ghi chú!');
@@ -524,4 +208,5 @@ app.get('/note/:id', (req, res) => {
 app.listen(PORT, () => {
     console.log(`✅ Server đang chạy tại http://localhost:${PORT}`);
     console.log(`💡 Để tạo ghi chú, truy cập http://localhost:${PORT}`);
+    console.log(`💡 Để đăng ký, truy cập http://localhost:${PORT}/register`);
 });
