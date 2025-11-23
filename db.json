@@ -1,0 +1,17 @@
+{
+  "users": [
+    {
+      "id": "s-RI5Tu2W4",
+      "username": "Quan1222",
+      "passwordHash": "$2b$10$uzOzEfRqOg6h5agvA23Jfuceo33yEWRj0oqGByFEG4SBgKJlXiM/2"
+    }
+  ],
+  "notes": [
+    {
+      "id": "ZE_U4VmO",
+      "content": "Hzjshsbajskahabajahabaahbabab50pm2 logs noteqvn --lines 50# --- Tự động Khôi phục PM2 khi Termux khởi động ---\r\n# Kiểm tra xem pm2 có đang chạy không.\r\nif ! pgrep -x \"pm2\" > /dev/null; then\r\n    # Khởi động lại các tiến trình đã lưu (noteqvn)\r\n    pm2 resurrect\r\nfi# --- Tự động Khôi phục PM2 khi Termux khởi động ---\r\n# Kiểm tra xem pm2 có đang chạy không.\r\nif ! pgrep -x \"pm2\" > /dev/null; then\r\n    # Khởi động lại các tiến trình đã lưu (noteqvn)\r\n    pm2 resurrect\r\nfi",
+      "userId": "s-RI5Tu2W4",
+      "timestamp": 1763788172896
+    }
+  ]
+}
