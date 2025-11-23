@@ -1,4 +1,4 @@
-// File: server.js (Phiên bản Hoàn Chỉnh sử dụng lowdb/JSON - Đã sửa lỗi URL Localhost)
+// File: server.js (Phiên bản Hoàn Chỉnh - Đã sửa lỗi URL và hoàn thành POST /login)
 const express = require('express');
 const bodyParser = require('body-parser');
 const session = require('express-session');
@@ -15,15 +15,8 @@ const saltRounds = 10;
 const DB_FILE = 'db.json'; // Tên file Database JSON
 
 // --- Hàm quan trọng để lấy Base URL động ---
-/**
- * Lấy Base URL (giao thức + host) từ request hiện tại.
- * Đảm bảo đường dẫn đúng khi chạy trên Render (HTTPS).
- */
 function getBaseUrl(req) {
-    // Lấy host (ví dụ: noteqvn-sever.onrender.com)
     const host = req.headers.host; 
-    
-    // Lấy giao thức: ưu tiên header X-Forwarded-Proto (thường là 'https' trên Render)
     const protocol = req.get('X-Forwarded-Proto') || req.protocol; 
 
     return `${protocol}://${host}`;
@@ -61,7 +54,7 @@ app.use(session({
     secret: 'daylakhobimathoacsession', 
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 60 * 60 * 1000, secure: process.env.NODE_ENV === 'production' } // Thêm secure: true cho production
+    cookie: { maxAge: 60 * 60 * 1000, secure: process.env.NODE_ENV === 'production' } 
 }));
 app.use(flash());
 
@@ -246,22 +239,19 @@ function renderHTML(title, bodyContent, req, username) {
 
 // --- TRANG CHỦ (GET /) ---
 app.get('/', async (req, res) => {
-    const BASE_URL = getBaseUrl(req); // <--- LẤY BASE URL ĐỘNG TẠI ĐÂY
+    const BASE_URL = getBaseUrl(req); 
 
     const db = app.locals.db;
-    let noteContent = ''; // Nội dung ghi chú đã được lưu (nếu có)
+    let noteContent = ''; 
     let noteLinkBox = '';
 
-    // Kiểm tra và hiển thị ghi chú đã lưu (nếu có)
     if (req.session.lastNoteId) {
-        // Tìm ghi chú trong DB
         const lastNote = db.data.notes.find(n => n.id === req.session.lastNoteId);
         
         if (lastNote) {
             noteContent = lastNote.content;
 
-            // TẠO URL CHÍNH XÁC
-            const fullNoteUrl = `${BASE_URL}/${lastNote.id}`; // <--- SỬ DỤNG BASE_URL ĐỘNG
+            const fullNoteUrl = `${BASE_URL}/${lastNote.id}`; // SỬ DỤNG BASE_URL ĐỘNG
 
             noteLinkBox = `
                 <h2>Ghi Chú Đã Lưu:</h2>
@@ -272,7 +262,6 @@ app.get('/', async (req, res) => {
                     <button class="copy-button" onclick="copyToClipboard('${fullNoteUrl}')">Sao Chép</button>
                 </div>
             `;
-            // Xóa ID sau khi hiển thị 
             delete req.session.lastNoteId; 
         }
     }
@@ -286,11 +275,9 @@ app.get('/', async (req, res) => {
         ${noteLinkBox}
         <script>
             function copyToClipboard(text) {
-                // Sử dụng API Clipboard hiện đại
                 navigator.clipboard.writeText(text).then(function() {
                     alert('Đã sao chép đường dẫn: ' + text);
                 }, function(err) {
-                    // Fallback cho các trình duyệt cũ hơn
                     const textarea = document.createElement('textarea');
                     textarea.value = text;
                     document.body.appendChild(textarea);
@@ -327,7 +314,6 @@ app.post('/', isAuthenticated, async (req, res) => {
         });
         await db.write();
 
-        // Lưu ID vào session để route GET / có thể hiển thị link đúng
         req.session.lastNoteId = noteId; 
         
         req.flash('success', 'Ghi chú đã được lưu thành công!');
@@ -345,7 +331,6 @@ app.get('/:id', async (req, res) => {
     const noteId = req.params.id;
     const db = app.locals.db;
     
-    // Tìm ghi chú
     const note = db.data.notes.find(n => n.id === noteId);
 
     if (!note) {
@@ -353,7 +338,6 @@ app.get('/:id', async (req, res) => {
         return res.redirect('/');
     }
     
-    // Lấy link hiện tại để chia sẻ
     const BASE_URL = getBaseUrl(req);
     const fullNoteUrl = `${BASE_URL}/${noteId}`;
 
@@ -390,13 +374,11 @@ app.get('/mynotes', isAuthenticated, async (req, res) => {
     const db = app.locals.db;
     const userId = req.session.userId;
     
-    // Lấy tất cả ghi chú của người dùng này, sắp xếp theo thời gian mới nhất
     const userNotes = db.data.notes
         .filter(n => n.userId === userId)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     let notesList = userNotes.map(n => {
-        // Lấy 50 ký tự đầu làm tiêu đề xem trước
         const preview = n.content.substring(0, 50) + (n.content.length > 50 ? '...' : '');
         const date = new Date(n.createdAt).toLocaleString('vi-VN');
         return `
@@ -426,7 +408,6 @@ app.get('/delete/:id', isAuthenticated, async (req, res) => {
     const db = app.locals.db;
     const userId = req.session.userId;
 
-    // Tìm index của ghi chú
     const noteIndex = db.data.notes.findIndex(n => n.id === noteId && n.userId === userId);
 
     if (noteIndex === -1) {
@@ -434,7 +415,6 @@ app.get('/delete/:id', isAuthenticated, async (req, res) => {
         return res.redirect('/mynotes');
     }
 
-    // Xóa ghi chú
     db.data.notes.splice(noteIndex, 1);
     await db.write();
 
@@ -477,7 +457,6 @@ app.post('/register', async (req, res) => {
         return res.redirect('/register');
     }
 
-    // 1. Kiểm tra username tồn tại
     const userExists = db.data.users.find(u => u.username === username);
 
     if (userExists) {
@@ -485,13 +464,12 @@ app.post('/register', async (req, res) => {
         return res.redirect('/register');
     }
 
-    // 2. Mã hóa và lưu
     try {
         const passwordHash = await bcrypt.hash(password, saltRounds);
         const userId = nanoid(10);
         
         db.data.users.push({ id: userId, username, passwordHash });
-        await db.write(); // Lưu thay đổi vào file JSON
+        await db.write(); 
         
         req.flash('success', 'Đăng ký thành công! Vui lòng đăng nhập.');
         console.log(`[USER] Đăng ký mới: ${username} (ID: ${userId})`);
@@ -525,7 +503,6 @@ app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     const db = app.locals.db;
     
-    // Tìm user
     const user = db.data.users.find(u => u.username === username);
 
     if (!user) {
@@ -536,10 +513,10 @@ app.post('/login', async (req, res) => {
     try {
         const match = await bcrypt.compare(password, user.passwordHash);
         if (match) {
-            req.session.userId = user.id; // Lưu ID người dùng vào Session
+            req.session.userId = user.id; 
             req.flash('success', `Chào mừng ${username}!`);
             console.log(`[LOGIN] Đăng nhập thành công: ${username}`);
-            res.redirect('/');
+            res.redirect('/'); // Chuyển hướng về trang chủ
         } else {
             req.flash('error', 'Tên người dùng hoặc mật khẩu không đúng.');
             res.redirect('/login');
