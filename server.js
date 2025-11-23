@@ -18,13 +18,15 @@ const DB_FILE = 'db.json'; // Tên file Database JSON
 let db;
 try {
     const adapter = new JSONFile(DB_FILE);
-    db = new Low(adapter, { users: [], notes: [] });
+    // Khởi tạo dữ liệu mặc định nếu file trống
+    const defaultData = { users: [], notes: [] }; 
+    db = new Low(adapter, defaultData);
     
     db.read();
     
-    // Khởi tạo dữ liệu mặc định nếu file trống
-    if (!db.data.users || !db.data.notes) {
-        db.data = { users: [], notes: [] };
+    // Nếu db.data rỗng, gán lại giá trị mặc định và ghi
+    if (!db.data || !db.data.users || !db.data.notes) {
+        db.data = defaultData;
         db.write();
     }
     console.log(`[DB] Đã kết nối đến Database LowDB (JSON): ${DB_FILE}`);
@@ -41,8 +43,8 @@ app.use(bodyParser.json());
 
 // Cấu hình Session 
 app.use(session({
-    // Nên dùng process.env.SESSION_SECRET trên Render
-    secret: 'daylakhobimathoacsession', 
+    // Sử dụng biến môi trường (nếu có) hoặc chuỗi cứng
+    secret: process.env.SESSION_SECRET || 'daylakhobimathoacsession', 
     resave: false,
     saveUninitialized: false,
     cookie: { maxAge: 60 * 60 * 1000 }
@@ -75,7 +77,7 @@ app.use(async (req, res, next) => {
     next();
 });
 
-// CSS TỔNG THỂ (Giữ nguyên)
+// CSS TỔNG THỂ 
 const style = `
     body {
         font-family: Arial, sans-serif;
@@ -172,7 +174,7 @@ const style = `
         padding: 10px;
         border-radius: 5px;
         display: flex;
-        flex-direction: column; /* Đã chỉnh để link RAW hiển thị tốt hơn */
+        flex-direction: column; 
         align-items: flex-start;
         margin-top: 10px;
     }
@@ -464,7 +466,7 @@ app.post('/note/:id/delete', isAuthenticated, async (req, res) => {
 });
 
 
-// --- TRANG XEM NỘI DUNG THÔ (GET /note/raw/:id) ---
+// --- TRANG XEM NỘI DUNG THÔ (GET /note/raw/:id) - CHỨC NĂNG RAW MỚI ---
 app.get('/note/raw/:id', (req, res) => {
     const noteId = req.params.id;
     const db = app.locals.db;
@@ -481,7 +483,7 @@ app.get('/note/raw/:id', (req, res) => {
 });
 
 
-// --- TRANG XEM GHI CHÚ ĐỘC LẬP (GET /note/:id) (ĐÃ SỬA LỖI URL ĐỘNG VÀ THÊM LINK RAW) ---
+// --- TRANG XEM GHI CHÚ ĐỘC LẬP (GET /note/:id) - ĐÃ CẬP NHẬT GIAO DIỆN LINK RAW ---
 app.get('/note/:id', (req, res) => {
     const noteId = req.params.id;
     const db = app.locals.db;
@@ -493,7 +495,7 @@ app.get('/note/:id', (req, res) => {
         return res.redirect('/');
     }
 
-    // ⭐ SỬA LỖI URL: Dùng req.protocol và req.get('host')
+    // ⭐ TẠO LIÊN KẾT ĐỘNG
     const host = req.get('host');
     const protocol = req.protocol;
     const fullShareLink = `${protocol}://${host}/note/${note.id}`;
@@ -536,10 +538,17 @@ app.get('/note/:id', (req, res) => {
 
         <script>
             function copyLink(linkToCopy) {
+                // Kiểm tra xem trình duyệt có hỗ trợ API clipboard không
+                if (!navigator.clipboard) {
+                    // Fallback cho trình duyệt cũ hơn (tùy chọn)
+                    return alert('Trình duyệt không hỗ trợ sao chép tự động. Vui lòng sao chép thủ công: ' + linkToCopy);
+                }
+                
                 navigator.clipboard.writeText(linkToCopy).then(() => {
                     alert('Đã sao chép liên kết!');
                 }, (err) => {
                     console.error('Không thể sao chép: ', err);
+                    alert('Lỗi khi sao chép liên kết.');
                 });
             }
         </script>
